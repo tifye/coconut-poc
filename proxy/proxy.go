@@ -3,23 +3,95 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/joho/godotenv"
+	"golang.org/x/crypto/ssh"
 )
 
-func main() {
+type ChannelConn struct {
+	ssh.Channel
+	laddr net.Addr
+	raddr net.Addr
+}
+
+func (cc ChannelConn) LocalAddr() net.Addr {
+	return cc.laddr
+}
+
+func (cc ChannelConn) RemoteAddr() net.Addr {
+	return cc.raddr
+}
+
+func (cc ChannelConn) SetDeadline(t time.Time) error {
+	log.Println("SetDeadline called")
+	return nil
+}
+
+func (cc ChannelConn) SetReadDeadline(t time.Time) error {
+	log.Println("SetReadDeadline called")
+	return nil
+}
+
+func (cc ChannelConn) SetWriteDeadline(t time.Time) error {
+	log.Println("SetWriteDeadline called")
+	return nil
+}
+
+func sshClient() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	log.Println("Dialing")
-	conn, err := net.Dial("tcp", ":9000")
+	publicKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_rsa.pub")
 	if err != nil {
-		log.Fatalln("failed to dial port 9000:", err)
+		return fmt.Errorf("failed to read private key, got: %s", err)
+	}
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(publicKeyBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse public key bytes, got: %s", err)
+	}
+
+	config := &ssh.ClientConfig{
+		User: "tifye",
+		Auth: []ssh.AuthMethod{
+			ssh.Password("mino"),
+		},
+		HostKeyCallback: ssh.FixedHostKey(publicKey),
+	}
+
+	client, err := ssh.Dial("tcp", "localhost:9000", config)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	c, reqs, err := client.OpenChannel("tunnel", nil)
+	if err != nil {
+		return nil
+	}
+
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
+	wg.Add(1)
+	go func(in <-chan *ssh.Request) {
+		ssh.DiscardRequests(in)
+		wg.Done()
+	}(reqs)
+
+	chanConn := ChannelConn{
+		Channel: c,
+		laddr:   client.LocalAddr(),
+		raddr:   client.RemoteAddr(),
 	}
 
 	ln := &SingleConnListener{
@@ -28,7 +100,6 @@ func main() {
 
 	s := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 			log.Println(r.URL.String())
 			buff := bytes.Buffer{}
 			_, err := io.Copy(&buff, r.Body)
@@ -54,12 +125,32 @@ func main() {
 		}
 	}()
 
-	err = ln.ServeConn(conn)
+	err = ln.ServeConn(chanConn)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
+	err = s.Shutdown(shutdownCtx)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	err = sshClient()
+	if err != nil {
+		log.Fatalln(err)
+	}
 }
 
 type SingleConnListener struct {
