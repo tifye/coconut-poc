@@ -114,7 +114,7 @@ func sshServer() error {
 			},
 			Rewrite: func(r *httputil.ProxyRequest) {
 				r.SetXForwarded()
-				log.Println(r.In.URL.String())
+				log.Println(r.In.Method, r.In.Host, r.In.URL.String())
 				url, _ := url.Parse("http://localhost:8080/")
 				r.SetURL(url)
 			},
