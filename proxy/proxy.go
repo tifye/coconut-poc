@@ -1,156 +1,42 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/ssh"
 )
 
-type ChannelConn struct {
+type NetChannelConn struct {
 	ssh.Channel
 	laddr net.Addr
 	raddr net.Addr
 }
 
-func (cc ChannelConn) LocalAddr() net.Addr {
+func (cc NetChannelConn) LocalAddr() net.Addr {
 	return cc.laddr
 }
-
-func (cc ChannelConn) RemoteAddr() net.Addr {
+func (cc NetChannelConn) RemoteAddr() net.Addr {
 	return cc.raddr
 }
-
-func (cc ChannelConn) SetDeadline(t time.Time) error {
-	log.Println("SetDeadline called")
+func (cc NetChannelConn) SetDeadline(t time.Time) error {
 	return nil
 }
-
-func (cc ChannelConn) SetReadDeadline(t time.Time) error {
-	log.Println("SetReadDeadline called")
+func (cc NetChannelConn) SetReadDeadline(t time.Time) error {
 	return nil
 }
-
-func (cc ChannelConn) SetWriteDeadline(t time.Time) error {
-	log.Println("SetWriteDeadline called")
+func (cc NetChannelConn) SetWriteDeadline(t time.Time) error {
 	return nil
-}
-
-func sshClient() error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	publicKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_rsa.pub")
-	if err != nil {
-		return fmt.Errorf("failed to read private key, got: %s", err)
-	}
-	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(publicKeyBytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse public key bytes, got: %s", err)
-	}
-
-	config := &ssh.ClientConfig{
-		User: "tifye",
-		Auth: []ssh.AuthMethod{
-			ssh.Password("mino"),
-		},
-		HostKeyCallback: ssh.FixedHostKey(publicKey),
-	}
-
-	client, err := ssh.Dial("tcp", "localhost:9000", config)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	c, reqs, err := client.OpenChannel("tunnel", nil)
-	if err != nil {
-		return nil
-	}
-
-	wg := sync.WaitGroup{}
-	defer wg.Wait()
-
-	wg.Add(1)
-	go func(in <-chan *ssh.Request) {
-		ssh.DiscardRequests(in)
-		wg.Done()
-	}(reqs)
-
-	chanConn := ChannelConn{
-		Channel: c,
-		laddr:   client.LocalAddr(),
-		raddr:   client.RemoteAddr(),
-	}
-
-	ln := &SingleConnListener{
-		ch: make(chan net.Conn),
-	}
-
-	s := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Println(r.URL.String())
-			buff := bytes.Buffer{}
-			_, err := io.Copy(&buff, r.Body)
-			if err != nil {
-				log.Println("err copying request body:", err)
-				return
-			}
-
-			w.Header().Add("Context-Type", "text")
-			_, err = w.Write([]byte("this is from my local"))
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			log.Println(buff.String())
-		}),
-	}
-
-	go func() {
-		err := s.Serve(ln)
-		if err != nil && err != http.ErrServerClosed {
-			log.Fatalln("server error:", err)
-		}
-	}()
-
-	err = ln.ServeConn(chanConn)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second*10)
-	defer cancel()
-	err = s.Shutdown(shutdownCtx)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	err = sshClient()
-	if err != nil {
-		log.Fatalln(err)
-	}
 }
 
 type SingleConnListener struct {
@@ -168,7 +54,6 @@ func (l *SingleConnListener) ServeConn(conn net.Conn) error {
 }
 
 func (l *SingleConnListener) Accept() (net.Conn, error) {
-	log.Println("Accept")
 	conn, ok := <-l.ch
 	if !ok {
 		return nil, net.ErrClosed
@@ -186,7 +71,6 @@ func (l *SingleConnListener) Close() error {
 }
 
 func (l *SingleConnListener) Addr() net.Addr {
-	log.Println("Addr")
 	return EmptyAddr{}
 }
 
@@ -197,4 +81,125 @@ func (EmptyAddr) Network() string {
 }
 func (EmptyAddr) String() string {
 	return ""
+}
+
+func openSSHConn() (net.Conn, error) {
+	publicKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_ed25519.pub")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read key, got: %s", err)
+	}
+
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(publicKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse key bytes, got: %s", err)
+	}
+
+	config := &ssh.ClientConfig{
+		User: "tifye",
+		Auth: []ssh.AuthMethod{
+			ssh.Password("mino"),
+		},
+		HostKeyCallback: ssh.FixedHostKey(publicKey),
+	}
+	client, err := ssh.Dial("tcp", "localhost:9000", config)
+	if err != nil {
+		return nil, err
+	}
+
+	ch, reqs, err := client.OpenChannel("tunnel", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	go ssh.DiscardRequests(reqs)
+
+	conn := NetChannelConn{
+		Channel: ch,
+		laddr:   client.LocalAddr(),
+		raddr:   client.RemoteAddr(),
+	}
+
+	return conn, nil
+}
+
+func run() error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	conn, err := openSSHConn()
+	if err != nil {
+		return err
+	}
+
+	ln := &SingleConnListener{
+		ch: make(chan net.Conn, 1),
+	}
+	err = ln.ServeConn(conn)
+	if err != nil {
+		return err
+	}
+
+	s := &http.Server{
+		Handler: &httputil.ReverseProxy{
+			Rewrite: func(r *httputil.ProxyRequest) {
+				r.SetXForwarded()
+				uri, _ := url.Parse("http://127.0.0.1:3000")
+				log.Info("rewriting", "method", r.In.Method, "req", r.In.URL)
+				r.SetURL(uri)
+			},
+			ModifyResponse: func(r *http.Response) error {
+				log.Info("routing back response", "req", r.Request.URL, "status", r.Status, "content-length", r.ContentLength)
+				return nil
+			},
+		},
+		BaseContext: func(l net.Listener) context.Context {
+			return ctx
+		},
+		// Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 	log.Println(r.URL.String())
+		// 	buff := bytes.Buffer{}
+		// 	_, err := io.Copy(&buff, r.Body)
+		// 	if err != nil {
+		// 		log.Println("err copying request body:", err)
+		// 		return
+		// 	}
+
+		// 	log.Println(buff.String())
+
+		// 	w.Header().Add("Content-Type", "text")
+		// 	_, err = w.Write([]byte("mino"))
+		// 	if err != nil {
+		// 		log.Println(err)
+		// 	}
+		// }),
+	}
+
+	go func() {
+		err := s.Serve(ln)
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal("server error:", err)
+		}
+	}()
+
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
+	err = s.Shutdown(shutdownCtx)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = run()
+	if err != nil {
+		log.Fatal(err)
+	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/ssh"
 )
@@ -21,12 +21,12 @@ import (
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatal(err)
 	}
 
 	err = sshServer()
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatal(err)
 	}
 }
 
@@ -45,7 +45,7 @@ func sshServer() error {
 		NoClientAuth: true,
 	}
 
-	privateKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_rsa")
+	privateKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_ed25519")
 	if err != nil {
 		return fmt.Errorf("failed to read private key, got: %s", err)
 	}
@@ -57,7 +57,7 @@ func sshServer() error {
 
 	ln, err := net.Listen("tcp", "0.0.0.0:9000")
 	if err != nil {
-		log.Fatalln("failed to listen on port 9000:", err)
+		log.Fatal("failed to listen on port 9000:", err)
 	}
 	nConn, err := ln.Accept()
 	if err != nil {
@@ -104,19 +104,25 @@ func sshServer() error {
 	}
 
 	server := &http.Server{
-		Addr: "0.0.0.0:9997",
+		Addr: "127.0.0.1:9997",
 		Handler: &httputil.ReverseProxy{
 			Transport: &http.Transport{
 				Dial: func(_, addr string) (net.Conn, error) {
-					log.Println(addr)
+					log.Info("dial called", "addr", addr)
 					return chanConn, nil
 				},
+				Proxy: http.ProxyFromEnvironment,
 			},
 			Rewrite: func(r *httputil.ProxyRequest) {
 				r.SetXForwarded()
-				log.Println(r.In.Method, r.In.Host, r.In.URL.String())
+				log.Info("rewrite", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
 				url, _ := url.Parse("http://localhost:8080/")
 				r.SetURL(url)
+			},
+			ErrorLog: log.StandardLog(),
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				log.Error("http: proxy error", "req", r.URL.String(), "err", err)
+				w.WriteHeader(http.StatusBadGateway)
 			},
 		},
 		ReadTimeout:  10 * time.Second,
@@ -124,17 +130,17 @@ func sshServer() error {
 	}
 
 	go func() {
-		log.Println("serving")
+		log.Info("serving")
 		err := server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalln(err)
+			log.Fatal(err)
 		}
 	}()
 
 	<-ctx.Done()
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	log.Println("Shutting down")
+	log.Info("Shutting down")
 	err = server.Shutdown(ctxShutDown)
 	if err != nil {
 		return fmt.Errorf("err on shutdown, got: %s", err)
@@ -158,16 +164,16 @@ func (cc ChannelConn) RemoteAddr() net.Addr {
 }
 
 func (cc ChannelConn) SetDeadline(t time.Time) error {
-	log.Println("SetDeadline called")
+	log.Info("SetDeadline called")
 	return nil
 }
 
 func (cc ChannelConn) SetReadDeadline(t time.Time) error {
-	log.Println("SetReadDeadline called")
+	log.Info("SetReadDeadline called")
 	return nil
 }
 
 func (cc ChannelConn) SetWriteDeadline(t time.Time) error {
-	log.Println("SetWriteDeadline called")
+	log.Info("SetWriteDeadline called")
 	return nil
 }
