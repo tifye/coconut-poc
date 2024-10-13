@@ -16,7 +16,7 @@ func newClient(ctx context.Context) *http.Server {
 		Handler: &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
 				r.SetXForwarded()
-				uri, _ := url.Parse("http://127.0.0.1:3000")
+				uri, _ := url.Parse("http://127.0.0.1:6280")
 				log.Info("rewriting", "method", r.In.Method, "req", r.In.URL)
 				r.SetURL(uri)
 			},
@@ -28,23 +28,6 @@ func newClient(ctx context.Context) *http.Server {
 		BaseContext: func(l net.Listener) context.Context {
 			return ctx
 		},
-		// Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 	log.Println(r.URL.String())
-		// 	buff := bytes.Buffer{}
-		// 	_, err := io.Copy(&buff, r.Body)
-		// 	if err != nil {
-		// 		log.Println("err copying request body:", err)
-		// 		return
-		// 	}
-
-		// 	log.Println(buff.String())
-
-		// 	w.Header().Add("Content-Type", "text")
-		// 	_, err = w.Write([]byte("mino"))
-		// 	if err != nil {
-		// 		log.Println(err)
-		// 	}
-		// }),
 	}
 
 	return s

@@ -42,13 +42,14 @@ func newServer() *http.Server {
 		},
 	}
 
+	ready := make(chan struct{}, 1)
+	ready <- struct{}{}
+
 	mux := http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		<-ready
 		proxyHandler.ServeHTTP(w, r)
-	})
-	mux.HandleFunc("GET /meep", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("meep"))
+		ready <- struct{}{}
 	})
 
 	server := &http.Server{
