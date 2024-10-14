@@ -52,6 +52,7 @@ func newServer(nConn net.Conn) *http.Server {
 
 	mux := http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// idea: can create middleware to manage notif chans for different proxy backends/conns
 		<-ready
 		proxyHandler.ServeHTTP(w, r)
 		ready <- struct{}{}
