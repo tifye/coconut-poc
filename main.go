@@ -75,6 +75,7 @@ func runServer(ctx context.Context) error {
 		wg.Done()
 	}()
 
+	// idea: can send request to client asking to open more channels
 	newChannelReq := <-chans
 	if newChannelReq.ChannelType() != "tunnel" {
 		err := newChannelReq.Reject(ssh.UnknownChannelType, "Only accepts tunnel channels")
