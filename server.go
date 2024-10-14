@@ -9,19 +9,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"golang.org/x/crypto/ssh"
 )
 
-func newServer() *http.Server {
-	log.Debug("listening for connection on port 9000")
-	ln, err := net.Listen("tcp", "127.0.0.1:9000")
-	if err != nil {
-		log.Fatal("failed to listen on port 9000:", err)
-	}
-	nConn, err := ln.Accept()
-	if err != nil {
-		log.Fatal("failed to accept new network conn", "err", err)
-	}
-
+func newServer(nConn net.Conn) *http.Server {
 	proxyHandler := &httputil.ReverseProxy{
 		Transport: &http.Transport{
 			Dial: func(_, addr string) (net.Conn, error) {
@@ -77,4 +68,33 @@ func newServer() *http.Server {
 	}
 
 	return server
+}
+
+type ChannelConn struct {
+	ssh.Channel
+	laddr net.Addr
+	raddr net.Addr
+}
+
+func (cc ChannelConn) LocalAddr() net.Addr {
+	return cc.laddr
+}
+
+func (cc ChannelConn) RemoteAddr() net.Addr {
+	return cc.raddr
+}
+
+func (cc ChannelConn) SetDeadline(t time.Time) error {
+	log.Info("SetDeadline called")
+	return nil
+}
+
+func (cc ChannelConn) SetReadDeadline(t time.Time) error {
+	log.Info("SetReadDeadline called")
+	return nil
+}
+
+func (cc ChannelConn) SetWriteDeadline(t time.Time) error {
+	log.Info("SetWriteDeadline called")
+	return nil
 }
