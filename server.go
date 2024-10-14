@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"time"
@@ -34,6 +35,19 @@ func newServer() *http.Server {
 			log.Info("rewrite", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
 			url, _ := url.Parse("http://localhost:3000")
 			r.SetURL(url)
+
+			trace := &httptrace.ClientTrace{
+				ConnectDone: func(network, addr string, err error) {
+					log.Debug("Dial complete", "network", "addr", "err", err)
+				},
+				GetConn: func(hostPort string) {
+					log.Debug("GetConn", "hostPort", hostPort)
+				},
+				GotConn: func(info httptrace.GotConnInfo) {
+					log.Debug("GotConn", "reused", info.Reused, "wasIdle", info.WasIdle)
+				},
+			}
+			r.Out = r.Out.WithContext(httptrace.WithClientTrace(r.Out.Context(), trace))
 		},
 		ErrorLog: log.StandardLog(),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -57,6 +71,9 @@ func newServer() *http.Server {
 		Handler:      &mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			log.Debug("Conn state changed", "state", state.String())
+		},
 	}
 
 	return server

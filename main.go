@@ -92,6 +92,8 @@ func runClient(ctx context.Context) error {
 }
 
 func main() {
+	log.SetLevel(log.DebugLevel)
+
 	if len(os.Args) < 2 {
 		log.Fatal("pass either \"client\" or \"server\" flag")
 	}
