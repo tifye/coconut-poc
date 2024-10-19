@@ -39,7 +39,7 @@ func runServer(ctx context.Context) error {
 		BannerCallback: func(conn ssh.ConnMetadata) string {
 			return "MINO"
 		},
-		NoClientAuth: true,
+		//NoClientAuth: true,
 	}
 
 	privateKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_ed25519")
