@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -24,7 +25,7 @@ type Client struct {
 
 func NewClient(proxyToAddr string, logger *log.Logger) (*Client, error) {
 	// Todo: how to properly read/create a key?
-	publicKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_ed25519.pub")
+	publicKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519.pub"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read key, got: %s", err)
 	}

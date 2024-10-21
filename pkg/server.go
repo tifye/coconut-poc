@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -25,7 +26,7 @@ type Server struct {
 
 func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 	// Todo: how to properly read/create a key?
-	privateKeyBytes, err := os.ReadFile(os.Getenv("KEYS_DIR") + "\\id_ed25519")
+	privateKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read private key, got: %s", err)
 	}
@@ -52,7 +53,7 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	ln, err := net.Listen("tcp", "0.0.0.0:9000")
+	ln, err := net.Listen("tcp", s.cAddr)
 	if err != nil {
 		log.Fatal("failed to listen on port 9000:", err)
 	}
@@ -138,7 +139,7 @@ func (s *Server) newServerProxy(conn net.Conn) *http.Server {
 
 			s.logger.Info("Rewriting", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
 
-			url, _ := url.Parse("http://localhost:6280")
+			url, _ := url.Parse("http://dsdf:6280")
 			r.SetURL(url)
 			trace := &httptrace.ClientTrace{
 				ConnectDone: func(network, addr string, err error) {
