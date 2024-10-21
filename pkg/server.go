@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -68,41 +67,12 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create server conn, got: %s", err)
 	}
 
-	wg := sync.WaitGroup{}
-	defer wg.Wait()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ssh.DiscardRequests(reqs)
-	}()
-
-	newChanReq := <-chans
-	if newChanReq.ChannelType() != "tunnel" {
-		err := newChanReq.Reject(ssh.UnknownChannelType, "Only accepts tunnel type channels")
-		if err != nil {
-			return fmt.Errorf("failed on channel reject: %s", err)
-		}
-	}
-
-	channel, requests, err := newChanReq.Accept()
+	sesh, err := newSession(ctx, s.logger, sshConn, chans, reqs)
 	if err != nil {
-		return fmt.Errorf("failed on channel accept: %s", err)
+		return fmt.Errorf("failed to create new session: %s", err)
 	}
 
-	wg.Add(1)
-	go func() {
-		ssh.DiscardRequests(requests)
-		wg.Done()
-	}()
-
-	chConn := ChannelConn{
-		Channel: channel,
-		laddr:   sshConn.LocalAddr(),
-		raddr:   sshConn.RemoteAddr(),
-	}
-
-	server := s.newServerProxy(chConn)
+	server := s.newServerProxy(sesh.MainTunnel.Conn)
 
 	go func() {
 		s.logger.Info("Serving")
