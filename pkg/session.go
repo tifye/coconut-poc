@@ -9,23 +9,24 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type SessionChannel struct {
+type Tunnel struct {
 	reqs    <-chan *ssh.Request
 	Conn    ChannelConn
 	sshChan ssh.Channel
 }
 
 type Session struct {
+	subdomain  string
 	logger     *log.Logger
 	sshConn    *ssh.ServerConn
 	chans      <-chan ssh.NewChannel
 	reqs       <-chan *ssh.Request
-	MainTunnel SessionChannel
+	mainTunnel Tunnel
 
 	mu sync.Mutex
 }
 
-func newSession(ctx context.Context, logger *log.Logger, sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) (*Session, error) {
+func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) (*Session, error) {
 	go func() {
 		ssh.DiscardRequests(reqs)
 	}()
@@ -64,10 +65,11 @@ func newSession(ctx context.Context, logger *log.Logger, sshConn *ssh.ServerConn
 	}
 
 	return &Session{
-		sshConn: sshConn,
-		chans:   chans,
-		reqs:    reqs,
-		MainTunnel: SessionChannel{
+		subdomain: subdomain,
+		sshConn:   sshConn,
+		chans:     chans,
+		reqs:      reqs,
+		mainTunnel: Tunnel{
 			reqs:    requests,
 			Conn:    chConn,
 			sshChan: channel,
@@ -81,5 +83,5 @@ func (s *Session) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.MainTunnel.sshChan.Close()
+	return s.mainTunnel.sshChan.Close()
 }
