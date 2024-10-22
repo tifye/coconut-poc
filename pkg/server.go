@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -23,6 +24,7 @@ type Server struct {
 	cAddr    string
 	sshCfg   *ssh.ServerConfig
 	sessions map[string]*Session
+	mu       sync.Mutex
 }
 
 func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
@@ -75,7 +77,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create new session: %s", err)
 	}
 
+	s.mu.Lock()
 	s.sessions[sesh.subdomain] = sesh
+	s.mu.Unlock()
 
 	server := s.newServerProxy()
 
@@ -100,13 +104,19 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+type ctxKey string
+
+const (
+	SessionContextKey ctxKey = "session"
+)
+
 func (s *Server) newServerProxy() *http.Server {
 	proxyHandler := &httputil.ReverseProxy{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				s.logger.Info("Dial called", "addr", addr)
 
-				sesh, ok := ctx.Value("session").(*Session)
+				sesh, ok := ctx.Value(SessionContextKey).(*Session)
 				if !ok {
 					s.logger.Fatal("DialContext: Invalid session object in context", "network", network, "addr", addr)
 				}
@@ -125,7 +135,7 @@ func (s *Server) newServerProxy() *http.Server {
 			url, _ := url.Parse("http://meep")
 			r.SetURL(url)
 
-			sesh, ok := r.In.Context().Value("session").(*Session)
+			sesh, ok := r.In.Context().Value(SessionContextKey).(*Session)
 			if !ok {
 				s.logger.Fatal("Rewrite: Invalid session object in context", "proto", r.In.Proto, "method", r.In.Method, "host", r.In.Host, "path", r.In.URL.String())
 			}
@@ -170,7 +180,9 @@ func (s *Server) newServerProxy() *http.Server {
 		s.logger.Debug("Serving request", "path", r.URL.String())
 
 		subpart, _, _ := strings.Cut(r.Host, ".")
+		s.mu.Lock()
 		sesh, found := s.sessions[subpart]
+		s.mu.Unlock()
 		if !found {
 			s.logger.Warn("Could not find session for incoming request", "host", r.Host, "subpart", subpart)
 			w.WriteHeader(http.StatusNotFound)
@@ -178,7 +190,7 @@ func (s *Server) newServerProxy() *http.Server {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "session", sesh)
+		ctx := context.WithValue(r.Context(), SessionContextKey, sesh)
 		r = r.WithContext(ctx)
 
 		// idea: can create middleware to manage notif chans for different proxy backends/conns
