@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -20,11 +21,13 @@ import (
 )
 
 type Server struct {
-	logger   *log.Logger
-	cAddr    string
-	sshCfg   *ssh.ServerConfig
-	sessions map[string]*Session
-	mu       sync.Mutex
+	logger       *log.Logger
+	cAddr        string
+	sshCfg       *ssh.ServerConfig
+	sessions     map[string]*Session
+	mu           sync.Mutex
+	shuttingDown atomic.Bool
+	clLn         net.Listener
 }
 
 func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
@@ -61,28 +64,42 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		log.Fatal("failed to listen on port 9000:", err)
 	}
+	defer ln.Close()
 
-	netConn, err := ln.Accept()
-	if err != nil {
-		return fmt.Errorf("failed to accept new network conn, got: %s", err)
-	}
+	s.clLn = ln
 
-	sshConn, chans, reqs, err := ssh.NewServerConn(netConn, s.sshCfg)
-	if err != nil {
-		return fmt.Errorf("failed to create server conn, got: %s", err)
-	}
+	go func() {
+		for {
+			netConn, err := s.clLn.Accept()
+			if err != nil {
+				if s.shuttingDown.Load() {
+					s.logger.Info("stopping client listener accept")
+				}
 
-	subdomain := generateSubdomain()
-	sesh, err := newSession(ctx, s.logger, subdomain, sshConn, chans, reqs)
-	if err != nil {
-		return fmt.Errorf("failed to create new session: %s", err)
-	}
+				s.logger.Error("failed to accept new network conn", "err", err)
+				return
+			}
 
-	s.logger.Info("Session created", "subdomain", subdomain)
+			sshConn, chans, reqs, err := ssh.NewServerConn(netConn, s.sshCfg)
+			if err != nil {
+				s.logger.Error("failed to create server conn", "err", err)
+				return
+			}
 
-	s.mu.Lock()
-	s.sessions[sesh.subdomain] = sesh
-	s.mu.Unlock()
+			subdomain := generateSubdomain()
+			sesh, err := newSession(ctx, s.logger, subdomain, sshConn, chans, reqs)
+			if err != nil {
+				s.logger.Error("failed to create new session", "err", err)
+				return
+			}
+
+			s.logger.Info("Session created", "subdomain", subdomain)
+
+			s.mu.Lock()
+			s.sessions[sesh.subdomain] = sesh
+			s.mu.Unlock()
+		}
+	}()
 
 	server := s.newServerProxy()
 
@@ -102,6 +119,19 @@ func (s *Server) Start(ctx context.Context) error {
 	err = server.Shutdown(ctxShutDown)
 	if err != nil {
 		return fmt.Errorf("err on shutdown, got: %s", err)
+	}
+
+	return nil
+}
+
+func (s *Server) Close(ctx context.Context) error {
+	s.shuttingDown.Store(true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	err := s.clLn.Close()
+	if err != nil {
+		s.logger.Error("client listener close", "err", err)
 	}
 
 	return nil
