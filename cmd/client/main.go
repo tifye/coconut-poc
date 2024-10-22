@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 
@@ -10,8 +11,14 @@ import (
 	"github.com/tifye/tunnel/pkg"
 )
 
-func run(ctx context.Context, logger *log.Logger) error {
-	client, err := pkg.NewClient("http://localhost:6280", logger)
+func run(ctx context.Context, logger *log.Logger, args []string) error {
+	target := "http://localhost:6280"
+	if len(args) > 0 {
+		target = args[0]
+	}
+
+	fmt.Println(target)
+	client, err := pkg.NewClient(target, logger)
 	if err != nil {
 		return err
 	}
@@ -30,7 +37,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	err = run(ctx, log.Default())
+	err = run(ctx, log.Default(), os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}

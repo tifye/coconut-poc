@@ -80,6 +80,8 @@ func (s *Server) Start(ctx context.Context) error {
 				return
 			}
 
+			s.logger.Info("Accepted net connection", "raddr", netConn.RemoteAddr(), "laddr", netConn.LocalAddr())
+
 			sshConn, chans, reqs, err := ssh.NewServerConn(netConn, s.sshCfg)
 			if err != nil {
 				s.logger.Error("failed to create server conn", "err", err)
@@ -165,15 +167,15 @@ func (s *Server) newServerProxy() *http.Server {
 
 			s.logger.Info("Rewriting", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
 
-			url, _ := url.Parse("http://meep")
-			r.SetURL(url)
-
 			sesh, ok := r.In.Context().Value(SessionContextKey).(*Session)
 			if !ok {
 				s.logger.Fatal("Rewrite: Invalid session object in context", "proto", r.In.Proto, "method", r.In.Method, "host", r.In.Host, "path", r.In.URL.String())
 			}
 
 			s.logger.Print(sesh.subdomain)
+
+			url, _ := url.Parse(fmt.Sprintf("http://%s.meep", sesh.subdomain))
+			r.SetURL(url)
 
 			trace := &httptrace.ClientTrace{
 				ConnectDone: func(network, addr string, err error) {
