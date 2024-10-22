@@ -72,10 +72,13 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create server conn, got: %s", err)
 	}
 
-	sesh, err := newSession(ctx, s.logger, "meep", sshConn, chans, reqs)
+	subdomain := generateSubdomain()
+	sesh, err := newSession(ctx, s.logger, subdomain, sshConn, chans, reqs)
 	if err != nil {
 		return fmt.Errorf("failed to create new session: %s", err)
 	}
+
+	s.logger.Info("Session created", "subdomain", subdomain)
 
 	s.mu.Lock()
 	s.sessions[sesh.subdomain] = sesh
