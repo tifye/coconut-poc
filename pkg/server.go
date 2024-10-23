@@ -158,7 +158,11 @@ func (s *Server) newServerProxy() *http.Server {
 
 				s.logger.Print(sesh.subdomain)
 
-				return sesh.mainTunnel.Conn, nil
+				t, err := sesh.Accept(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return t.Conn, nil
 			},
 			Proxy: http.ProxyFromEnvironment,
 		},
@@ -202,8 +206,6 @@ func (s *Server) newServerProxy() *http.Server {
 
 	mux := http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		s.logger.Debug("Proto", r.Proto)
-
 		s.logger.Debug("Waiting to serve request", "path", r.URL.String())
 
 		<-ready

@@ -2,28 +2,37 @@ package pkg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/charmbracelet/log"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/errgroup"
 )
 
-type Tunnel struct {
+type tunnel struct {
 	reqs    <-chan *ssh.Request
 	Conn    ChannelConn
 	sshChan ssh.Channel
+	onclose func(*tunnel)
+}
+
+func (t *tunnel) Close() error {
+	err := t.sshChan.Close()
+	t.onclose(t)
+	return err
 }
 
 type Session struct {
-	subdomain  string
-	logger     *log.Logger
-	sshConn    *ssh.ServerConn
-	chans      <-chan ssh.NewChannel
-	reqs       <-chan *ssh.Request
-	mainTunnel Tunnel
-
-	mu sync.Mutex
+	subdomain string
+	logger    *log.Logger
+	sshConn   *ssh.ServerConn
+	chans     <-chan ssh.NewChannel
+	reqs      <-chan *ssh.Request
+	tunnels   []*tunnel
+	tunnelCh  chan *tunnel
+	mu        sync.Mutex
 }
 
 func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshConn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request) (*Session, error) {
@@ -64,18 +73,29 @@ func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshCo
 		raddr:   sshConn.RemoteAddr(),
 	}
 
+	tunnels := make([]*tunnel, 1)
+	tunnelCh := make(chan *tunnel, 1)
+	tunnels[0] = &tunnel{
+		reqs:    requests,
+		Conn:    chConn,
+		sshChan: channel,
+		onclose: func(t *tunnel) {
+			go func() {
+				tunnelCh <- t
+			}()
+		},
+	}
+	tunnelCh <- tunnels[0]
+
 	return &Session{
 		subdomain: subdomain,
 		sshConn:   sshConn,
 		chans:     chans,
 		reqs:      reqs,
-		mainTunnel: Tunnel{
-			reqs:    requests,
-			Conn:    chConn,
-			sshChan: channel,
-		},
-		logger: logger,
-		mu:     sync.Mutex{},
+		tunnels:   tunnels,
+		tunnelCh:  tunnelCh,
+		logger:    logger,
+		mu:        sync.Mutex{},
 	}, nil
 }
 
@@ -83,5 +103,22 @@ func (s *Session) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.mainTunnel.sshChan.Close()
+	eg, _ := errgroup.WithContext(ctx)
+	for _, t := range s.tunnels {
+		eg.Go(t.sshChan.Close)
+	}
+
+	return eg.Wait()
+}
+
+func (s *Session) Accept(ctx context.Context) (*tunnel, error) {
+	select {
+	case t, ok := <-s.tunnelCh:
+		if !ok {
+			return nil, errors.New("tunnel channel closed")
+		}
+		return t, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
