@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 
 	"github.com/charmbracelet/log"
@@ -12,10 +13,24 @@ import (
 )
 
 type tunnel struct {
-	reqs    <-chan *ssh.Request
-	Conn    ChannelConn
+	chConn  ChannelConn
 	sshChan ssh.Channel
 	onclose func(*tunnel)
+}
+
+func newTunnel(sshChan ssh.Channel, raddr, laddr net.Addr, onclose func(*tunnel)) *tunnel {
+	if onclose == nil {
+		onclose = func(*tunnel) {}
+	}
+	return &tunnel{
+		sshChan: sshChan,
+		onclose: onclose,
+		chConn: ChannelConn{
+			Channel: sshChan,
+			laddr:   laddr,
+			raddr:   raddr,
+		},
+	}
 }
 
 func (t *tunnel) Close() error {
@@ -67,24 +82,13 @@ func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshCo
 		ssh.DiscardRequests(requests)
 	}()
 
-	chConn := ChannelConn{
-		Channel: channel,
-		laddr:   sshConn.LocalAddr(),
-		raddr:   sshConn.RemoteAddr(),
-	}
-
 	tunnels := make([]*tunnel, 1)
 	tunnelCh := make(chan *tunnel, 1)
-	tunnels[0] = &tunnel{
-		reqs:    requests,
-		Conn:    chConn,
-		sshChan: channel,
-		onclose: func(t *tunnel) {
-			go func() {
-				tunnelCh <- t
-			}()
-		},
-	}
+	tunnels[0] = newTunnel(channel, sshConn.RemoteAddr(), sshConn.LocalAddr(), func(t *tunnel) {
+		go func() {
+			tunnelCh <- t
+		}()
+	})
 	tunnelCh <- tunnels[0]
 
 	return &Session{

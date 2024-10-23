@@ -20,7 +20,7 @@ func run(ctx context.Context, logger *log.Logger) error {
 }
 
 func main() {
-	log.SetLevel(log.DebugLevel)
+	// log.SetLevel(log.DebugLevel)
 
 	err := godotenv.Load()
 	if err != nil {

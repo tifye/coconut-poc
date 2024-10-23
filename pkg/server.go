@@ -162,7 +162,7 @@ func (s *Server) newServerProxy() *http.Server {
 				if err != nil {
 					return nil, err
 				}
-				return t.Conn, nil
+				return t.chConn, nil
 			},
 			Proxy: http.ProxyFromEnvironment,
 		},
@@ -201,21 +201,8 @@ func (s *Server) newServerProxy() *http.Server {
 		},
 	}
 
-	ready := make(chan struct{}, 1)
-	ready <- struct{}{}
-
 	mux := http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		s.logger.Debug("Waiting to serve request", "path", r.URL.String())
-
-		<-ready
-		defer func() {
-			ready <- struct{}{}
-			s.logger.Debug("Finished serving request", "path", r.URL.Path)
-		}()
-
-		s.logger.Debug("Serving request", "path", r.URL.String())
-
 		subpart, _, _ := strings.Cut(r.Host, ".")
 		s.mu.Lock()
 		sesh, found := s.sessions[subpart]
@@ -229,6 +216,8 @@ func (s *Server) newServerProxy() *http.Server {
 
 		ctx := context.WithValue(r.Context(), SessionContextKey, sesh)
 		r = r.WithContext(ctx)
+
+		s.logger.Info("Serving request", "proto", r.Proto)
 
 		// idea: can create middleware to manage notif chans for different proxy backends/conns
 		proxyHandler.ServeHTTP(w, r)
@@ -279,7 +268,4 @@ func (cc ChannelConn) SetWriteDeadline(t time.Time) error {
 func (cc ChannelConn) Close() error {
 	log.Info("Close Channel called")
 	return nil
-}
-
-type SessionTunnelTransport struct {
 }
