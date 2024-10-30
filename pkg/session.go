@@ -1,10 +1,12 @@
 package pkg
 
 import (
+	"bufio"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -14,10 +16,10 @@ import (
 )
 
 type tunnel struct {
+	logger  *log.Logger
 	laddr   net.Addr
 	raddr   net.Addr
 	sshChan ssh.Channel
-	onclose func(*tunnel)
 }
 
 func (t *tunnel) LocalAddr() net.Addr {
@@ -29,17 +31,17 @@ func (t *tunnel) RemoteAddr() net.Addr {
 }
 
 func (t *tunnel) SetDeadline(_ time.Time) error {
-	log.Info("SetDeadline called")
+	t.logger.Info("SetDeadline called")
 	return nil
 }
 
 func (t *tunnel) SetReadDeadline(_ time.Time) error {
-	log.Info("SetReadDeadline called")
+	t.logger.Info("SetReadDeadline called")
 	return nil
 }
 
 func (t *tunnel) SetWriteDeadline(_ time.Time) error {
-	log.Info("SetWriteDeadline called")
+	t.logger.Info("SetWriteDeadline called")
 	return nil
 }
 
@@ -51,25 +53,71 @@ func (t *tunnel) Write(buf []byte) (n int, err error) {
 	return t.sshChan.Write(buf)
 }
 
-func newTunnel(sshChan ssh.Channel, raddr, laddr net.Addr, onclose func(*tunnel)) *tunnel {
-	if onclose == nil {
-		onclose = func(*tunnel) {}
-	}
+func newTunnel(logger *log.Logger, sshChan ssh.Channel, raddr, laddr net.Addr) *tunnel {
 	return &tunnel{
+		logger:  logger,
 		sshChan: sshChan,
-		onclose: onclose,
 		laddr:   laddr,
 		raddr:   raddr,
 	}
 }
 
-func (t *tunnel) Close() error {
-	t.onclose(t)
-	return nil
+func (t *tunnel) Cleanup() error {
+	t.logger.Debug("Cleanup")
+	return t.sshChan.Close()
 }
 
-func (t *tunnel) Cleanup() error {
-	return t.sshChan.Close()
+type signalClose struct {
+	io.ReadCloser
+	done chan<- struct{}
+}
+
+func (sc *signalClose) Close() error {
+	defer func() {
+		sc.done <- struct{}{}
+	}()
+	return sc.ReadCloser.Close()
+}
+
+func (t *tunnel) listen(trch <-chan *tunnelRequest) {
+	for tr := range trch {
+		res, err := t.roundTrip(tr)
+		if err != nil {
+			tr.errch <- err
+			continue
+		}
+
+		ctx := tr.r.Context()
+		select {
+		case tr.respch <- res:
+		case <-ctx.Done():
+			tr.errch <- ctx.Err()
+		}
+
+		select {
+		case <-tr.done:
+		case <-ctx.Done():
+			tr.errch <- ctx.Err()
+		}
+	}
+}
+
+func (t *tunnel) roundTrip(tr *tunnelRequest) (*http.Response, error) {
+	err := tr.r.Write(t)
+	if err != nil {
+		return nil, err
+	}
+
+	respReader := bufio.NewReader(t)
+	resp, err := http.ReadResponse(respReader, tr.r)
+	if err != nil {
+		return nil, err
+	}
+
+	sc := &signalClose{done: tr.done, ReadCloser: resp.Body}
+	resp.Body = sc
+
+	return resp, nil
 }
 
 type Session struct {
@@ -79,7 +127,7 @@ type Session struct {
 	chans     <-chan ssh.NewChannel
 	reqs      <-chan *ssh.Request
 	tunnels   []*tunnel
-	tunnelCh  chan *tunnel
+	reqch     chan *tunnelRequest
 	mu        sync.Mutex
 }
 
@@ -115,16 +163,11 @@ func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshCo
 		ssh.DiscardRequests(requests)
 	}()
 
+	trch := make(chan *tunnelRequest)
 	tunnels := make([]*tunnel, 1)
-	tunnelCh := make(chan *tunnel, 1)
-	tunnels[0] = newTunnel(channel, sshConn.RemoteAddr(), sshConn.LocalAddr(), func(t *tunnel) {
-		logger := logger.WithPrefix("tunnel")
-		go func() {
-			logger.Debug("returning tunnel to pool")
-			tunnelCh <- t
-		}()
-	})
-	tunnelCh <- tunnels[0]
+	tlogger := logger.WithPrefix("tunnel 1")
+	tunnels[0] = newTunnel(tlogger, channel, sshConn.RemoteAddr(), sshConn.LocalAddr())
+	go tunnels[0].listen(trch)
 
 	return &Session{
 		subdomain: subdomain,
@@ -132,8 +175,8 @@ func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshCo
 		chans:     chans,
 		reqs:      reqs,
 		tunnels:   tunnels,
-		tunnelCh:  tunnelCh,
 		logger:    logger,
+		reqch:     trch,
 		mu:        sync.Mutex{},
 	}, nil
 }
@@ -150,14 +193,27 @@ func (s *Session) Close(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (s *Session) Accept(ctx context.Context) (*tunnel, error) {
-	select {
-	case t, ok := <-s.tunnelCh:
-		if !ok {
-			return nil, errors.New("tunnel channel closed")
-		}
-		return t, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+type tunnelRequest struct {
+	r      *http.Request
+	respch chan *http.Response
+	errch  chan error
+	done   chan struct{}
+}
+
+func (s *Session) roundTrip(r *http.Request) (<-chan *http.Response, <-chan error, error) {
+	tr := &tunnelRequest{
+		r:      r,
+		respch: make(chan *http.Response),
+		errch:  make(chan error),
+		done:   make(chan struct{}),
 	}
+
+	ctx := r.Context()
+	select {
+	case s.reqch <- tr:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+
+	return tr.respch, tr.errch, nil
 }

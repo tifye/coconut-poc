@@ -148,27 +148,7 @@ const (
 
 func (s *Server) newServerProxy() *http.Server {
 	proxyHandler := &httputil.ReverseProxy{
-		Transport: &http.Transport{
-			DisableKeepAlives: false,
-
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				s.logger.Info("Dialing", "addr", addr)
-
-				sesh, ok := ctx.Value(SessionContextKey).(*Session)
-				if !ok {
-					s.logger.Fatal("DialContext: Invalid session object in context", "network", network, "addr", addr)
-				}
-
-				t, err := sesh.Accept(ctx)
-				if err != nil {
-					s.logger.Error("Failed on accept tunnel", "addr", addr, "err", err)
-					return nil, err
-				}
-				s.logger.Debug("Accepted tunnel", "addr", addr)
-				return t, nil
-			},
-			Proxy: http.ProxyFromEnvironment,
-		},
+		Transport: s,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetXForwarded()
 
@@ -252,4 +232,26 @@ func (s *Server) newServerProxy() *http.Server {
 	}
 
 	return server
+}
+
+func (s *Server) RoundTrip(r *http.Request) (*http.Response, error) {
+	sesh, ok := r.Context().Value(SessionContextKey).(*Session)
+	if !ok {
+		s.logger.Fatal("Invalid session object in context", "proto", r.Proto, "method", r.Method, "host", r.Host, "path", r.URL.String())
+	}
+
+	respch, errch, err := sesh.roundTrip(r)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := r.Context()
+	select {
+	case resp := <-respch:
+		return resp, nil
+	case err := <-errch:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
