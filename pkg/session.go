@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/charmbracelet/log"
 	"golang.org/x/crypto/ssh"
@@ -20,37 +19,6 @@ type tunnel struct {
 	laddr   net.Addr
 	raddr   net.Addr
 	sshChan ssh.Channel
-}
-
-func (t *tunnel) LocalAddr() net.Addr {
-	return t.laddr
-}
-
-func (t *tunnel) RemoteAddr() net.Addr {
-	return t.raddr
-}
-
-func (t *tunnel) SetDeadline(_ time.Time) error {
-	t.logger.Info("SetDeadline called")
-	return nil
-}
-
-func (t *tunnel) SetReadDeadline(_ time.Time) error {
-	t.logger.Info("SetReadDeadline called")
-	return nil
-}
-
-func (t *tunnel) SetWriteDeadline(_ time.Time) error {
-	t.logger.Info("SetWriteDeadline called")
-	return nil
-}
-
-func (t *tunnel) Read(buf []byte) (n int, err error) {
-	return t.sshChan.Read(buf)
-}
-
-func (t *tunnel) Write(buf []byte) (n int, err error) {
-	return t.sshChan.Write(buf)
 }
 
 func newTunnel(logger *log.Logger, sshChan ssh.Channel, raddr, laddr net.Addr) *tunnel {
@@ -103,12 +71,12 @@ func (t *tunnel) listen(trch <-chan *tunnelRequest) {
 }
 
 func (t *tunnel) roundTrip(tr *tunnelRequest) (*http.Response, error) {
-	err := tr.r.Write(t)
+	err := tr.r.Write(t.sshChan)
 	if err != nil {
 		return nil, err
 	}
 
-	respReader := bufio.NewReader(t)
+	respReader := bufio.NewReader(t.sshChan)
 	resp, err := http.ReadResponse(respReader, tr.r)
 	if err != nil {
 		return nil, err
@@ -197,7 +165,8 @@ type tunnelRequest struct {
 	r      *http.Request
 	respch chan *http.Response
 	errch  chan error
-	done   chan struct{}
+	// Used to signal the closure of the response body.
+	done chan struct{}
 }
 
 func (s *Session) roundTrip(r *http.Request) (<-chan *http.Response, <-chan error, error) {
