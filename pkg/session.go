@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/log"
 	"golang.org/x/crypto/ssh"
@@ -16,6 +17,37 @@ type tunnel struct {
 	chConn  ChannelConn
 	sshChan ssh.Channel
 	onclose func(*tunnel)
+}
+
+func (t *tunnel) LocalAddr() net.Addr {
+	return t.chConn.laddr
+}
+
+func (t *tunnel) RemoteAddr() net.Addr {
+	return t.chConn.raddr
+}
+
+func (t *tunnel) SetDeadline(_ time.Time) error {
+	log.Info("SetDeadline called")
+	return nil
+}
+
+func (t *tunnel) SetReadDeadline(_ time.Time) error {
+	log.Info("SetReadDeadline called")
+	return nil
+}
+
+func (t *tunnel) SetWriteDeadline(_ time.Time) error {
+	log.Info("SetWriteDeadline called")
+	return nil
+}
+
+func (t *tunnel) Read(buf []byte) (n int, err error) {
+	return t.sshChan.Read(buf)
+}
+
+func (t *tunnel) Write(buf []byte) (n int, err error) {
+	return t.sshChan.Write(buf)
 }
 
 func newTunnel(sshChan ssh.Channel, raddr, laddr net.Addr, onclose func(*tunnel)) *tunnel {
@@ -34,9 +66,12 @@ func newTunnel(sshChan ssh.Channel, raddr, laddr net.Addr, onclose func(*tunnel)
 }
 
 func (t *tunnel) Close() error {
-	err := t.sshChan.Close()
 	t.onclose(t)
-	return err
+	return nil
+}
+
+func (t *tunnel) Cleanup() error {
+	return t.sshChan.Close()
 }
 
 type Session struct {
@@ -85,7 +120,9 @@ func newSession(ctx context.Context, logger *log.Logger, subdomain string, sshCo
 	tunnels := make([]*tunnel, 1)
 	tunnelCh := make(chan *tunnel, 1)
 	tunnels[0] = newTunnel(channel, sshConn.RemoteAddr(), sshConn.LocalAddr(), func(t *tunnel) {
+		logger := logger.WithPrefix("tunnel")
 		go func() {
+			logger.Debug("returning tunnel to pool")
 			tunnelCh <- t
 		}()
 	})
@@ -109,7 +146,7 @@ func (s *Session) Close(ctx context.Context) error {
 
 	eg, _ := errgroup.WithContext(ctx)
 	for _, t := range s.tunnels {
-		eg.Go(t.sshChan.Close)
+		eg.Go(t.Cleanup)
 	}
 
 	return eg.Wait()

@@ -89,7 +89,8 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 
 			subdomain := generateSubdomain()
-			sesh, err := newSession(ctx, s.logger, subdomain, sshConn, chans, reqs)
+			logger := s.logger.WithPrefix(subdomain)
+			sesh, err := newSession(ctx, logger, subdomain, sshConn, chans, reqs)
 			if err != nil {
 				s.logger.Error("failed to create new session", "err", err)
 				return
@@ -148,21 +149,23 @@ const (
 func (s *Server) newServerProxy() *http.Server {
 	proxyHandler := &httputil.ReverseProxy{
 		Transport: &http.Transport{
+			DisableKeepAlives: false,
+
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				s.logger.Info("Dial called", "addr", addr)
+				s.logger.Info("Dialing", "addr", addr)
 
 				sesh, ok := ctx.Value(SessionContextKey).(*Session)
 				if !ok {
 					s.logger.Fatal("DialContext: Invalid session object in context", "network", network, "addr", addr)
 				}
 
-				s.logger.Print(sesh.subdomain)
-
 				t, err := sesh.Accept(ctx)
 				if err != nil {
+					s.logger.Error("Failed on accept tunnel", "addr", addr, "err", err)
 					return nil, err
 				}
-				return t.chConn, nil
+				s.logger.Debug("Accepted tunnel", "addr", addr)
+				return t, nil
 			},
 			Proxy: http.ProxyFromEnvironment,
 		},
@@ -176,20 +179,25 @@ func (s *Server) newServerProxy() *http.Server {
 				s.logger.Fatal("Rewrite: Invalid session object in context", "proto", r.In.Proto, "method", r.In.Method, "host", r.In.Host, "path", r.In.URL.String())
 			}
 
-			s.logger.Print(sesh.subdomain)
-
-			url, _ := url.Parse(fmt.Sprintf("http://%s.meep", sesh.subdomain))
+			url, _ := url.Parse(fmt.Sprintf("http://%s", sesh.subdomain))
 			r.SetURL(url)
 
 			trace := &httptrace.ClientTrace{
 				ConnectDone: func(network, addr string, err error) {
-					s.logger.Debug("Dial complete", "network", "addr", "err", err)
+					s.logger.Debug("Dial complete", "network", network, "addr", addr, "err", err)
 				},
 				GetConn: func(hostPort string) {
 					s.logger.Debug("GetConn", "hostPort", hostPort)
 				},
 				GotConn: func(info httptrace.GotConnInfo) {
 					s.logger.Debug("GotConn", "reused", info.Reused, "wasIdle", info.WasIdle)
+				},
+				PutIdleConn: func(err error) {
+					if err != nil {
+						s.logger.Debug("Failed to return conn to pool", "err", err)
+					} else {
+						s.logger.Error("Conn was returned to pool")
+					}
 				},
 			}
 			r.Out = r.Out.WithContext(httptrace.WithClientTrace(r.Out.Context(), trace))
@@ -198,11 +206,22 @@ func (s *Server) newServerProxy() *http.Server {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.logger.Error("http: proxy error", "path", r.URL.Path, "err", err)
 			w.WriteHeader(http.StatusBadGateway)
+
+		},
+		ModifyResponse: func(r *http.Response) error {
+			s.logger.Info("routing back response", "req", r.Request.URL, "status", r.Status, "content-length", r.ContentLength)
+			return nil
 		},
 	}
 
 	mux := http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		upgrade := r.Header.Get("Upgrade")
+		if upgrade == "websocket" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+
 		subpart, _, _ := strings.Cut(r.Host, ".")
 		s.mu.Lock()
 		sesh, found := s.sessions[subpart]
@@ -216,8 +235,7 @@ func (s *Server) newServerProxy() *http.Server {
 
 		ctx := context.WithValue(r.Context(), SessionContextKey, sesh)
 		r = r.WithContext(ctx)
-
-		s.logger.Info("Serving request", "proto", r.Proto)
+		s.logger.Info("Serving request", "proto", r.Proto, "path", r.URL.Path)
 
 		// idea: can create middleware to manage notif chans for different proxy backends/conns
 		proxyHandler.ServeHTTP(w, r)
