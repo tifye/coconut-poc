@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -161,26 +160,6 @@ func (s *Server) newServerProxy() *http.Server {
 
 			url, _ := url.Parse(fmt.Sprintf("http://%s", sesh.subdomain))
 			r.SetURL(url)
-
-			trace := &httptrace.ClientTrace{
-				ConnectDone: func(network, addr string, err error) {
-					s.logger.Debug("Dial complete", "network", network, "addr", addr, "err", err)
-				},
-				GetConn: func(hostPort string) {
-					s.logger.Debug("GetConn", "hostPort", hostPort)
-				},
-				GotConn: func(info httptrace.GotConnInfo) {
-					s.logger.Debug("GotConn", "reused", info.Reused, "wasIdle", info.WasIdle)
-				},
-				PutIdleConn: func(err error) {
-					if err != nil {
-						s.logger.Debug("Failed to return conn to pool", "err", err)
-					} else {
-						s.logger.Error("Conn was returned to pool")
-					}
-				},
-			}
-			r.Out = r.Out.WithContext(httptrace.WithClientTrace(r.Out.Context(), trace))
 		},
 		ErrorLog: s.logger.StandardLog(),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
