@@ -14,17 +14,18 @@ import (
 )
 
 type tunnel struct {
-	chConn  ChannelConn
+	laddr   net.Addr
+	raddr   net.Addr
 	sshChan ssh.Channel
 	onclose func(*tunnel)
 }
 
 func (t *tunnel) LocalAddr() net.Addr {
-	return t.chConn.laddr
+	return t.laddr
 }
 
 func (t *tunnel) RemoteAddr() net.Addr {
-	return t.chConn.raddr
+	return t.raddr
 }
 
 func (t *tunnel) SetDeadline(_ time.Time) error {
@@ -57,11 +58,8 @@ func newTunnel(sshChan ssh.Channel, raddr, laddr net.Addr, onclose func(*tunnel)
 	return &tunnel{
 		sshChan: sshChan,
 		onclose: onclose,
-		chConn: ChannelConn{
-			Channel: sshChan,
-			laddr:   laddr,
-			raddr:   raddr,
-		},
+		laddr:   laddr,
+		raddr:   raddr,
 	}
 }
 
