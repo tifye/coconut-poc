@@ -53,7 +53,7 @@ func NewClient(proxyToAddr string, logger *log.Logger) (*Client, error) {
 
 func (c *Client) Start(ctx context.Context, serverAddr string) error {
 	errCh := make(chan error)
-	connCh := make(chan net.Conn)
+	connCh := make(chan NetChannelConn)
 	go func() {
 		client, err := ssh.Dial("tcp", serverAddr, c.sshCfn)
 		if err != nil {
@@ -69,7 +69,10 @@ func (c *Client) Start(ctx context.Context, serverAddr string) error {
 
 		go ssh.DiscardRequests(reqs)
 
+		connCtx, cancel := context.WithCancel(ctx)
 		conn := NetChannelConn{
+			ctx:     connCtx,
+			cancel:  cancel,
 			Channel: ch,
 			laddr:   client.LocalAddr(),
 			raddr:   client.RemoteAddr(),
@@ -77,7 +80,7 @@ func (c *Client) Start(ctx context.Context, serverAddr string) error {
 		connCh <- conn
 	}()
 
-	var conn net.Conn
+	var conn NetChannelConn
 	select {
 	case err := <-errCh:
 		return err
@@ -108,6 +111,8 @@ func (c *Client) Start(ctx context.Context, serverAddr string) error {
 
 	select {
 	case <-ctx.Done():
+	case <-conn.ctx.Done():
+		return context.Cause(conn.ctx)
 	case err := <-errCh:
 		return err
 	}
@@ -124,11 +129,19 @@ func (c *Client) Start(ctx context.Context, serverAddr string) error {
 }
 
 type NetChannelConn struct {
+	ctx    context.Context
+	cancel func()
 	ssh.Channel
 	laddr net.Addr
 	raddr net.Addr
 }
 
+func (cc NetChannelConn) Close() error {
+	log.Debug("Close on NetChannelConn")
+	err := cc.Channel.Close()
+	cc.cancel()
+	return err
+}
 func (cc NetChannelConn) LocalAddr() net.Addr {
 	return cc.laddr
 }
@@ -161,6 +174,9 @@ func (c *Client) newClientProxy(ctx context.Context) *http.Server {
 		},
 		BaseContext: func(l net.Listener) context.Context {
 			return ctx
+		},
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			log.Debug("Conn state changed", "state", state.String())
 		},
 	}
 
@@ -196,6 +212,7 @@ func (l *SingleConnListener) Close() error {
 	}
 
 	close(l.ch)
+	l.closed.Store(true)
 	return nil
 }
 

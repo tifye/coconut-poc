@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -19,9 +20,13 @@ import (
 )
 
 type Server struct {
-	logger *log.Logger
-	cAddr  string
-	sshCfg *ssh.ServerConfig
+	logger       *log.Logger
+	cAddr        string
+	sshCfg       *ssh.ServerConfig
+	sessions     map[string]*Session
+	mu           sync.Mutex
+	shuttingDown atomic.Bool
+	clLn         net.Listener
 }
 
 func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
@@ -46,9 +51,10 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 	config.AddHostKey(privateKey)
 
 	return &Server{
-		cAddr:  cAddr,
-		logger: logger,
-		sshCfg: config,
+		cAddr:    cAddr,
+		logger:   logger,
+		sshCfg:   config,
+		sessions: make(map[string]*Session, 0),
 	}, nil
 }
 
@@ -57,52 +63,47 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		log.Fatal("failed to listen on port 9000:", err)
 	}
+	defer ln.Close()
 
-	netConn, err := ln.Accept()
-	if err != nil {
-		return fmt.Errorf("failed to accept new network conn, got: %s", err)
-	}
+	s.clLn = ln
 
-	sshConn, chans, reqs, err := ssh.NewServerConn(netConn, s.sshCfg)
-	if err != nil {
-		return fmt.Errorf("failed to create server conn, got: %s", err)
-	}
-
-	wg := sync.WaitGroup{}
-	defer wg.Wait()
-
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		ssh.DiscardRequests(reqs)
-	}()
+		for {
+			netConn, err := s.clLn.Accept()
+			if err != nil {
+				if s.shuttingDown.Load() {
+					s.logger.Info("stopping client listener accept")
+				}
 
-	newChanReq := <-chans
-	if newChanReq.ChannelType() != "tunnel" {
-		err := newChanReq.Reject(ssh.UnknownChannelType, "Only accepts tunnel type channels")
-		if err != nil {
-			return fmt.Errorf("failed on channel reject: %s", err)
+				s.logger.Error("failed to accept new network conn", "err", err)
+				return
+			}
+
+			s.logger.Info("Accepted net connection", "raddr", netConn.RemoteAddr(), "laddr", netConn.LocalAddr())
+
+			sshConn, chans, reqs, err := ssh.NewServerConn(netConn, s.sshCfg)
+			if err != nil {
+				s.logger.Error("failed to create server conn", "err", err)
+				return
+			}
+
+			subdomain := generateSubdomain()
+			logger := s.logger.WithPrefix(subdomain)
+			sesh, err := newSession(ctx, logger, subdomain, sshConn, chans, reqs)
+			if err != nil {
+				s.logger.Error("failed to create new session", "err", err)
+				return
+			}
+
+			s.logger.Info("Session created", "subdomain", subdomain)
+
+			s.mu.Lock()
+			s.sessions[sesh.subdomain] = sesh
+			s.mu.Unlock()
 		}
-	}
-
-	channel, requests, err := newChanReq.Accept()
-	if err != nil {
-		return fmt.Errorf("failed on channel accept: %s", err)
-	}
-
-	wg.Add(1)
-	go func() {
-		ssh.DiscardRequests(requests)
-		wg.Done()
 	}()
 
-	chConn := ChannelConn{
-		Channel: channel,
-		laddr:   sshConn.LocalAddr(),
-		raddr:   sshConn.RemoteAddr(),
-	}
-
-	server := s.newServerProxy(chConn)
+	server := s.newServerProxy()
 
 	go func() {
 		s.logger.Info("Serving")
@@ -125,59 +126,75 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) newServerProxy(conn net.Conn) *http.Server {
+func (s *Server) Close(ctx context.Context) error {
+	s.shuttingDown.Store(true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	err := s.clLn.Close()
+	if err != nil {
+		s.logger.Error("client listener close", "err", err)
+	}
+
+	return nil
+}
+
+type ctxKey string
+
+const (
+	SessionContextKey ctxKey = "session"
+)
+
+func (s *Server) newServerProxy() *http.Server {
 	proxyHandler := &httputil.ReverseProxy{
-		Transport: &http.Transport{
-			Dial: func(_, addr string) (net.Conn, error) {
-				s.logger.Info("Dial called", "addr", addr)
-				return conn, nil
-			},
-			Proxy: http.ProxyFromEnvironment,
-		},
+		Transport: s,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetXForwarded()
 
 			s.logger.Info("Rewriting", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
 
-			url, _ := url.Parse("http://dsdf:6280")
-			r.SetURL(url)
-			trace := &httptrace.ClientTrace{
-				ConnectDone: func(network, addr string, err error) {
-					s.logger.Debug("Dial complete", "network", "addr", "err", err)
-				},
-				GetConn: func(hostPort string) {
-					s.logger.Debug("GetConn", "hostPort", hostPort)
-				},
-				GotConn: func(info httptrace.GotConnInfo) {
-					s.logger.Debug("GotConn", "reused", info.Reused, "wasIdle", info.WasIdle)
-				},
+			sesh, ok := r.In.Context().Value(SessionContextKey).(*Session)
+			if !ok {
+				s.logger.Fatal("Rewrite: Invalid session object in context", "proto", r.In.Proto, "method", r.In.Method, "host", r.In.Host, "path", r.In.URL.String())
 			}
-			r.Out = r.Out.WithContext(httptrace.WithClientTrace(r.Out.Context(), trace))
+
+			url, _ := url.Parse(fmt.Sprintf("http://%s", sesh.subdomain))
+			r.SetURL(url)
 		},
 		ErrorLog: s.logger.StandardLog(),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.logger.Error("http: proxy error", "path", r.URL.Path, "err", err)
 			w.WriteHeader(http.StatusBadGateway)
+
+		},
+		ModifyResponse: func(r *http.Response) error {
+			s.logger.Info("routing back response", "req", r.Request.URL, "status", r.Status, "content-length", r.ContentLength)
+			return nil
 		},
 	}
 
-	ready := make(chan struct{}, 1)
-	ready <- struct{}{}
-
 	mux := http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		s.logger.Debug("Proto", r.Proto)
+		upgrade := r.Header.Get("Upgrade")
+		if upgrade == "websocket" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
 
-		s.logger.Debug("Waiting to serve request", "path", r.URL.Path)
+		subpart, _, _ := strings.Cut(r.Host, ".")
+		s.mu.Lock()
+		sesh, found := s.sessions[subpart]
+		s.mu.Unlock()
+		if !found {
+			s.logger.Warn("Could not find session for incoming request", "host", r.Host, "subpart", subpart)
+			w.WriteHeader(http.StatusNotFound)
+			w.Write(nil)
+			return
+		}
 
-		<-ready
-
-		s.logger.Debug("Serving request", "path", r.URL.Path)
-
-		defer func() {
-			ready <- struct{}{}
-			s.logger.Debug("Finished serving request", "path", r.URL.Path)
-		}()
+		ctx := context.WithValue(r.Context(), SessionContextKey, sesh)
+		r = r.WithContext(ctx)
+		s.logger.Info("Serving request", "proto", r.Proto, "path", r.URL.Path)
 
 		// idea: can create middleware to manage notif chans for different proxy backends/conns
 		proxyHandler.ServeHTTP(w, r)
@@ -196,36 +213,24 @@ func (s *Server) newServerProxy(conn net.Conn) *http.Server {
 	return server
 }
 
-type ChannelConn struct {
-	ssh.Channel
-	laddr net.Addr
-	raddr net.Addr
-}
+func (s *Server) RoundTrip(r *http.Request) (*http.Response, error) {
+	sesh, ok := r.Context().Value(SessionContextKey).(*Session)
+	if !ok {
+		s.logger.Fatal("Invalid session object in context", "proto", r.Proto, "method", r.Method, "host", r.Host, "path", r.URL.String())
+	}
 
-func (cc ChannelConn) LocalAddr() net.Addr {
-	return cc.laddr
-}
+	respch, errch, err := sesh.roundTrip(r)
+	if err != nil {
+		return nil, err
+	}
 
-func (cc ChannelConn) RemoteAddr() net.Addr {
-	return cc.raddr
-}
-
-func (cc ChannelConn) SetDeadline(t time.Time) error {
-	log.Info("SetDeadline called")
-	return nil
-}
-
-func (cc ChannelConn) SetReadDeadline(t time.Time) error {
-	log.Info("SetReadDeadline called")
-	return nil
-}
-
-func (cc ChannelConn) SetWriteDeadline(t time.Time) error {
-	log.Info("SetWriteDeadline called")
-	return nil
-}
-
-func (cc ChannelConn) Close() error {
-	log.Info("Close Channel called")
-	return nil
+	ctx := r.Context()
+	select {
+	case resp := <-respch:
+		return resp, nil
+	case err := <-errch:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
