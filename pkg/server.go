@@ -47,6 +47,23 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 			logger.Debug("password callback", "user", c.User(), "password", string(pass))
 			return nil, nil
 		},
+		PublicKeyAuthAlgorithms: []string{"ssh-ed25519"},
+		AuthLogCallback: func(conn ssh.ConnMetadata, method string, err error) {
+			if err != nil {
+				if errors.Is(err, ssh.ErrNoAuth) {
+					logger.Debug("auth log callback but auth has yet to be passed")
+					return
+				}
+
+				logger.Error("failed auth attempt", "method", method, "raddr", conn.RemoteAddr(), "err", err)
+				return
+			}
+
+			logger.Info("auth passed", "method", method, "raddr", conn.RemoteAddr())
+		},
+		BannerCallback: func(conn ssh.ConnMetadata) string {
+			return "mino"
+		},
 	}
 	config.AddHostKey(privateKey)
 
