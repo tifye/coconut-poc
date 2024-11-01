@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,15 +28,9 @@ type Server struct {
 }
 
 func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
-	// Todo: how to properly read/create a key?
-	privateKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519"))
+	signer, err := getSigner()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read private key, got: %s", err)
-	}
-
-	privateKey, err := ssh.ParsePrivateKey(privateKeyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse private key bytes, got: %s", err)
+		return nil, err
 	}
 
 	// Todo: sensible defaults
@@ -47,7 +39,11 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 			logger.Debug("password callback", "user", c.User(), "password", string(pass))
 			return nil, nil
 		},
+		MaxAuthTries:            6, // default anyway, just being explicit
 		PublicKeyAuthAlgorithms: []string{"ssh-ed25519"},
+		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			return nil, nil
+		},
 		AuthLogCallback: func(conn ssh.ConnMetadata, method string, err error) {
 			if err != nil {
 				if errors.Is(err, ssh.ErrNoAuth) {
@@ -65,7 +61,7 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 			return "mino"
 		},
 	}
-	config.AddHostKey(privateKey)
+	config.AddHostKey(signer)
 
 	return &Server{
 		cAddr:    cAddr,

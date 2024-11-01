@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -24,22 +22,20 @@ type Client struct {
 }
 
 func NewClient(proxyToAddr string, logger *log.Logger) (*Client, error) {
-	// Todo: how to properly read/create a key?
-	publicKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519.pub"))
+	signer, err := getSigner()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read key, got: %s", err)
+		return nil, err
 	}
-
-	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(publicKeyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse key bytes, got: %s", err)
-	}
+	publicKey := signer.PublicKey()
 
 	// Todo: sensible defaults
 	config := &ssh.ClientConfig{
 		User: "tifye",
 		Auth: []ssh.AuthMethod{
-			ssh.Password("mino"),
+			ssh.PublicKeysCallback(func() (signers []ssh.Signer, err error) {
+				signer, err := getSigner()
+				return []ssh.Signer{signer}, err
+			}),
 		},
 		HostKeyCallback: ssh.FixedHostKey(publicKey),
 	}
