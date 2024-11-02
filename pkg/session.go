@@ -186,3 +186,7 @@ func (s *Session) roundTrip(r *http.Request) (<-chan *http.Response, <-chan erro
 
 	return tr.respch, tr.errch, nil
 }
+
+func (s *Session) Logger() *log.Logger {
+	return s.logger
+}

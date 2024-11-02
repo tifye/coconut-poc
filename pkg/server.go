@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/tifye/tunnel/assert"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -171,32 +172,32 @@ func (s *Server) newServerProxy() *http.Server {
 	proxyHandler := &httputil.ReverseProxy{
 		Transport: s,
 		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetXForwarded()
-
-			s.logger.Info("Rewriting", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
-
 			sesh, ok := r.In.Context().Value(SessionContextKey).(*Session)
-			if !ok {
-				s.logger.Fatal("Rewrite: Invalid session object in context", "proto", r.In.Proto, "method", r.In.Method, "host", r.In.Host, "path", r.In.URL.String())
-			}
+			assert.Assert(ok, "expected session object")
 
-			url, _ := url.Parse(fmt.Sprintf("http://%s", sesh.subdomain))
+			sesh.Logger().Info("rewriting", "method", r.In.Method, "path", r.In.Host+r.In.URL.String())
+
+			r.SetXForwarded()
+			url, _ := url.Parse(fmt.Sprintf("http://%s", sesh.sshConn.RemoteAddr().String()))
 			r.SetURL(url)
 		},
 		ErrorLog: s.logger.StandardLog(),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			s.logger.Error("http: proxy error", "path", r.URL.Path, "err", err)
+			sesh, ok := r.Context().Value(SessionContextKey).(*Session)
+			assert.Assert(ok, "expected session object")
+			sesh.Logger().Error("http: proxy error", "path", r.URL.Path, "err", err)
 			w.WriteHeader(http.StatusBadGateway)
-
 		},
 		ModifyResponse: func(r *http.Response) error {
-			s.logger.Info("routing back response", "req", r.Request.URL, "status", r.Status, "content-length", r.ContentLength)
+			sesh, ok := r.Request.Context().Value(SessionContextKey).(*Session)
+			assert.Assert(ok, "expected session object")
+			sesh.Logger().Info("routing back response", "req", r.Request.URL, "status", r.Status, "content-length", r.ContentLength)
 			return nil
 		},
 	}
 
 	mux := http.ServeMux{}
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		upgrade := r.Header.Get("Upgrade")
 		if upgrade == "websocket" {
 			w.WriteHeader(http.StatusNotAcceptable)
@@ -208,17 +209,16 @@ func (s *Server) newServerProxy() *http.Server {
 		sesh, found := s.sessions[subpart]
 		s.mu.Unlock()
 		if !found {
-			s.logger.Warn("Could not find session for incoming request", "host", r.Host, "subpart", subpart)
+			s.logger.Warn("could not find session for incoming request", "host", r.Host, "subpart", subpart)
 			w.WriteHeader(http.StatusNotFound)
 			w.Write(nil)
 			return
 		}
 
+		sesh.Logger().Info("serving request", "proto", r.Proto, "path", r.URL.Path)
+
 		ctx := context.WithValue(r.Context(), SessionContextKey, sesh)
 		r = r.WithContext(ctx)
-		s.logger.Info("Serving request", "proto", r.Proto, "path", r.URL.Path)
-
-		// idea: can create middleware to manage notif chans for different proxy backends/conns
 		proxyHandler.ServeHTTP(w, r)
 	})
 
@@ -227,9 +227,6 @@ func (s *Server) newServerProxy() *http.Server {
 		Handler:      &mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
-		ConnState: func(conn net.Conn, state http.ConnState) {
-			log.Debug("Conn state changed", "state", state.String())
-		},
 	}
 
 	return server
@@ -237,9 +234,7 @@ func (s *Server) newServerProxy() *http.Server {
 
 func (s *Server) RoundTrip(r *http.Request) (*http.Response, error) {
 	sesh, ok := r.Context().Value(SessionContextKey).(*Session)
-	if !ok {
-		s.logger.Fatal("Invalid session object in context", "proto", r.Proto, "method", r.Method, "host", r.Host, "path", r.URL.String())
-	}
+	assert.Assert(ok, "expected session object")
 
 	respch, errch, err := sesh.roundTrip(r)
 	if err != nil {
