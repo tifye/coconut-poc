@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -17,47 +15,35 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+type ClientConfig struct {
+	User          string
+	Auth          []ssh.AuthMethod
+	ServerHostKey ssh.PublicKey
+	Logger        *log.Logger
+	ProxyPass     string
+}
+
 type Client struct {
 	logger      *log.Logger
 	sshCfn      *ssh.ClientConfig
 	proxyToAddr string
 }
 
-func NewClient(proxyToAddr string, logger *log.Logger) (*Client, error) {
-	// YES I AM AWARE THAT THIS WHOLE SHABLAM IS STUPID ITS JUST FOR TEST DEPLOY AND EXPLORATION
-	hostkey, _, _, _, err := ssh.ParseAuthorizedKey([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4Rvid2IsaTT87t5nOcFXIimWRQejEaHB2LBwYkFqv1"))
-	if err != nil {
-		return nil, err
-	}
-
-	// Todo: sensible defaults
-	config := &ssh.ClientConfig{
-		User: "tifye",
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeysCallback(func() (signers []ssh.Signer, err error) {
-				privateKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519"))
-				if err != nil {
-					return nil, fmt.Errorf("failed to read private key, got: %s", err)
-				}
-
-				signer, err := ssh.ParsePrivateKey(privateKeyBytes)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse private key bytes, got: %s", err)
-				}
-				return []ssh.Signer{signer}, err
-			}),
-		},
-		HostKeyCallback: ssh.FixedHostKey(hostkey),
+func NewClient(config *ClientConfig) (*Client, error) {
+	sshConfig := &ssh.ClientConfig{
+		User:            config.User,
+		Auth:            config.Auth,
+		HostKeyCallback: ssh.FixedHostKey(config.ServerHostKey),
 		BannerCallback: func(message string) error {
-			logger.Info(message)
+			config.Logger.Info(message)
 			return nil
 		},
 	}
 
 	return &Client{
-		logger:      logger,
-		sshCfn:      config,
-		proxyToAddr: proxyToAddr,
+		logger:      config.Logger,
+		sshCfn:      sshConfig,
+		proxyToAddr: config.ProxyPass,
 	}, nil
 }
 

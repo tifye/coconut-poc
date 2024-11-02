@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/charmbracelet/log"
 	"github.com/joho/godotenv"
 	"github.com/tifye/tunnel/pkg"
+	"golang.org/x/crypto/ssh"
 )
 
 func run(ctx context.Context, logger *log.Logger, args []string) error {
@@ -17,8 +19,33 @@ func run(ctx context.Context, logger *log.Logger, args []string) error {
 		target = args[0]
 	}
 
-	fmt.Println(target)
-	client, err := pkg.NewClient(target, logger)
+	hostkey, _, _, _, err := ssh.ParseAuthorizedKey([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4Rvid2IsaTT87t5nOcFXIimWRQejEaHB2LBwYkFqv1"))
+	if err != nil {
+		return err
+	}
+
+	config := &pkg.ClientConfig{
+		ProxyPass:     target,
+		User:          "tifye",
+		ServerHostKey: hostkey,
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeysCallback(func() (signers []ssh.Signer, err error) {
+				privateKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519"))
+				if err != nil {
+					return nil, fmt.Errorf("failed to read private key, got: %s", err)
+				}
+
+				signer, err := ssh.ParsePrivateKey(privateKeyBytes)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse private key bytes, got: %s", err)
+				}
+				return []ssh.Signer{signer}, err
+			}),
+		},
+		Logger: logger,
+	}
+
+	client, err := pkg.NewClient(config)
 	if err != nil {
 		return err
 	}
