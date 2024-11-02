@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 
 	"github.com/charmbracelet/log"
 	"github.com/joho/godotenv"
+	"github.com/tifye/tunnel/cmd/cli"
 	"github.com/tifye/tunnel/pkg"
 	"golang.org/x/crypto/ssh"
 )
@@ -54,9 +56,24 @@ func run(ctx context.Context, logger *log.Logger, args []string) error {
 }
 
 func main() {
-	log.SetLevel(log.DebugLevel)
+	logger := log.NewWithOptions(os.Stdout, log.Options{
+		Level:           log.DebugLevel,
+		TimeFormat:      "15:04:05",
+		ReportTimestamp: true,
+	})
 
-	err := godotenv.Load()
+	path, file, err := cli.OpenNewLogFile()
+	if err != nil {
+		logger.Fatal(err)
+	}
+	defer file.Close()
+
+	w := io.MultiWriter(os.Stdout, file)
+	logger.SetOutput(w)
+
+	logger.Infof("Outputing logs to %s", path)
+
+	err = godotenv.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
