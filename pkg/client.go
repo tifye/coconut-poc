@@ -38,6 +38,7 @@ func NewClient(config *ClientConfig) (*Client, error) {
 			config.Logger.Info(message)
 			return nil
 		},
+		Timeout: 10 * time.Second,
 	}
 
 	return &Client{
