@@ -44,16 +44,9 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 			logger.Debug("password callback", "user", c.User(), "password", string(pass))
 			return nil, nil
 		},
-		MaxAuthTries:            6, // default anyway, just being explicit
 		PublicKeyAuthAlgorithms: []string{"ssh-ed25519"},
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			// todo: ssh.CertChecker, look into this more it seems like would be useful here
-			// Client says: "You can use this public key to verify this signature on this piece of data"
-			// Server checks that this is a public key registered in its system
-			// Server verifies the signature of the piece of data using the public key
-
-			// The public key is mapped to a specific user in the Server's system
-
 			if !keys.IsAuthorized(key) {
 				return nil, errors.New("not authorized")
 			}

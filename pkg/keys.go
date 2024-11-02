@@ -3,7 +3,6 @@ package pkg
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -41,13 +40,9 @@ func loadAuthorizedKeys() (authorizedKeys, error) {
 }
 
 func getSigner() (ssh.Signer, error) {
-	// Todo: how to properly read/create a key?
-	privateKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read private key, got: %s", err)
-	}
+	rawKey := os.Getenv("HOSTKEY")
 
-	signer, err := ssh.ParsePrivateKey(privateKeyBytes)
+	signer, err := ssh.ParsePrivateKey([]byte(rawKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse private key bytes, got: %s", err)
 	}

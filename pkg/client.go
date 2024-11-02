@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -22,22 +24,34 @@ type Client struct {
 }
 
 func NewClient(proxyToAddr string, logger *log.Logger) (*Client, error) {
-	signer, err := getSigner()
+	// YES I AM AWARE THAT THIS WHOLE SHABLAM IS STUPID ITS JUST FOR TEST DEPLOY AND EXPLORATION
+	hostkey, _, _, _, err := ssh.ParseAuthorizedKey([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH4Rvid2IsaTT87t5nOcFXIimWRQejEaHB2LBwYkFqv1"))
 	if err != nil {
 		return nil, err
 	}
-	publicKey := signer.PublicKey()
 
 	// Todo: sensible defaults
 	config := &ssh.ClientConfig{
 		User: "tifye",
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeysCallback(func() (signers []ssh.Signer, err error) {
-				signer, err := getSigner()
+				privateKeyBytes, err := os.ReadFile(filepath.Join(os.Getenv("KEYS_DIR") + "\\id_ed25519"))
+				if err != nil {
+					return nil, fmt.Errorf("failed to read private key, got: %s", err)
+				}
+
+				signer, err := ssh.ParsePrivateKey(privateKeyBytes)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse private key bytes, got: %s", err)
+				}
 				return []ssh.Signer{signer}, err
 			}),
 		},
-		HostKeyCallback: ssh.FixedHostKey(publicKey),
+		HostKeyCallback: ssh.FixedHostKey(hostkey),
+		BannerCallback: func(message string) error {
+			logger.Info(message)
+			return nil
+		},
 	}
 
 	return &Client{
