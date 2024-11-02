@@ -17,6 +17,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+type ServerConfig struct {
+	Signer                  ssh.Signer
+	PublicKeyAuthAlgorithms []string
+	PublicKeyCallback       func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error)
+	ClientListenerAddress   string
+	NoClientAuth            bool
+	Logger                  *log.Logger
+}
+
 type Server struct {
 	logger       *log.Logger
 	cAddr        string
@@ -27,31 +36,20 @@ type Server struct {
 	clLn         net.Listener
 }
 
-func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
-	signer, err := getSigner()
-	if err != nil {
-		return nil, err
+func NewServer(config *ServerConfig) (*Server, error) {
+	if config.Logger == nil {
+		config.Logger = log.Default()
 	}
 
-	keys, err := loadAuthorizedKeys()
-	if err != nil {
-		return nil, err
+	if config.ClientListenerAddress == "" {
+		config.ClientListenerAddress = ":9000"
 	}
 
-	// Todo: sensible defaults
-	config := &ssh.ServerConfig{
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			logger.Debug("password callback", "user", c.User(), "password", string(pass))
-			return nil, nil
-		},
-		PublicKeyAuthAlgorithms: []string{"ssh-ed25519"},
-		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			// todo: ssh.CertChecker, look into this more it seems like would be useful here
-			if !keys.IsAuthorized(key) {
-				return nil, errors.New("not authorized")
-			}
-			return nil, nil
-		},
+	logger := config.Logger
+	sshConfig := &ssh.ServerConfig{
+		NoClientAuth:            config.NoClientAuth,
+		PublicKeyAuthAlgorithms: config.PublicKeyAuthAlgorithms,
+		PublicKeyCallback:       config.PublicKeyCallback,
 		AuthLogCallback: func(conn ssh.ConnMetadata, method string, err error) {
 			if err != nil {
 				if errors.Is(err, ssh.ErrNoAuth) {
@@ -69,12 +67,13 @@ func NewServer(cAddr string, logger *log.Logger) (*Server, error) {
 			return "mino"
 		},
 	}
-	config.AddHostKey(signer)
+
+	sshConfig.AddHostKey(config.Signer)
 
 	return &Server{
-		cAddr:    cAddr,
-		logger:   logger,
-		sshCfg:   config,
+		cAddr:    config.ClientListenerAddress,
+		logger:   config.Logger,
+		sshCfg:   sshConfig,
 		sessions: make(map[string]*Session, 0),
 	}, nil
 }
