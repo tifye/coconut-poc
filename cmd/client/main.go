@@ -81,7 +81,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	err = run(ctx, log.Default(), os.Args[1:])
+	err = run(ctx, logger, os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}
