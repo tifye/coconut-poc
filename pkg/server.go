@@ -29,7 +29,7 @@ type ServerConfig struct {
 type Server struct {
 	logger       *log.Logger
 	cAddr        string
-	sshCfg       *ssh.ServerConfig
+	sshcfg       *ssh.ServerConfig
 	sessions     map[string]*Session
 	mu           sync.Mutex
 	shuttingDown atomic.Bool
@@ -63,9 +63,6 @@ func NewServer(config *ServerConfig) (*Server, error) {
 
 			logger.Info("auth passed", "method", method, "raddr", conn.RemoteAddr())
 		},
-		BannerCallback: func(conn ssh.ConnMetadata) string {
-			return "mino"
-		},
 	}
 
 	sshConfig.AddHostKey(config.Signer)
@@ -73,7 +70,7 @@ func NewServer(config *ServerConfig) (*Server, error) {
 	return &Server{
 		cAddr:    config.ClientListenerAddress,
 		logger:   config.Logger,
-		sshCfg:   sshConfig,
+		sshcfg:   sshConfig,
 		sessions: make(map[string]*Session, 0),
 	}, nil
 }
@@ -101,13 +98,18 @@ func (s *Server) Start(ctx context.Context) error {
 
 			s.logger.Info("Accepted net connection", "raddr", netConn.RemoteAddr(), "laddr", netConn.LocalAddr())
 
-			sshConn, chans, reqs, err := ssh.NewServerConn(netConn, s.sshCfg)
+			subdomain := generateSubdomain()
+
+			config := *s.sshcfg
+			config.BannerCallback = func(conn ssh.ConnMetadata) string {
+				return subdomain
+			}
+			sshConn, chans, reqs, err := ssh.NewServerConn(netConn, &config)
 			if err != nil {
 				s.logger.Error("failed to create server conn", "err", err)
 				return
 			}
 
-			subdomain := generateSubdomain()
 			logger := s.logger.WithPrefix(subdomain)
 			sesh, err := newSession(ctx, logger, subdomain, sshConn, chans, reqs)
 			if err != nil {
