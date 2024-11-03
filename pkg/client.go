@@ -19,6 +19,7 @@ type ClientConfig struct {
 	User          string
 	Auth          []ssh.AuthMethod
 	ServerHostKey ssh.PublicKey
+	NoAuth        bool
 	Logger        *log.Logger
 	ProxyPass     string
 }
@@ -30,10 +31,16 @@ type Client struct {
 }
 
 func NewClient(config *ClientConfig) (*Client, error) {
+	var hkcb ssh.HostKeyCallback
+	if config.NoAuth {
+		hkcb = ssh.InsecureIgnoreHostKey()
+	} else {
+		hkcb = ssh.FixedHostKey(config.ServerHostKey)
+	}
 	sshConfig := &ssh.ClientConfig{
 		User:            config.User,
 		Auth:            config.Auth,
-		HostKeyCallback: ssh.FixedHostKey(config.ServerHostKey),
+		HostKeyCallback: hkcb,
 		BannerCallback: func(message string) error {
 			config.Logger.Info(message)
 			return nil
