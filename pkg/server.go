@@ -149,13 +149,13 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) Close(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.shuttingDown.Load() {
 		return errors.New("already closed")
 	}
 	s.shuttingDown.Store(true)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for _, sesh := range s.sessions {
 		sesh.Close(ctx)
