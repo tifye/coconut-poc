@@ -139,7 +139,8 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Info("Serving")
 		err := server.Serve(serverLn)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logger.Fatal(err)
+			s.logger.Error("server failed", "err", err)
+			s.Close(context.Background())
 		}
 	}()
 	return nil
