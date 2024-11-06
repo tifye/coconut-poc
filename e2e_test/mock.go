@@ -14,12 +14,12 @@ type MockBackend struct {
 	Listener net.Listener
 	Addr     string
 
-	rateLimit   int
+	rateLimit   uint
 	rateLimiter *time.Ticker
 }
 
 type MockBackendConfig struct {
-	RateLimit int
+	RateLimit uint
 }
 
 func newMockBackend(config *MockBackendConfig) *MockBackend {
