@@ -16,15 +16,18 @@ type MockBackend struct {
 
 	rateLimit   uint
 	rateLimiter *time.Ticker
+	latency     uint
 }
 
 type MockBackendConfig struct {
 	RateLimit uint
+	Latency   uint
 }
 
 func newMockBackend(config *MockBackendConfig) *MockBackend {
 	backend := &MockBackend{
 		rateLimit: config.RateLimit,
+		latency:   config.Latency,
 	}
 
 	if backend.rateLimit > 0 {
@@ -58,6 +61,11 @@ func (mb *MockBackend) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if mb.latency > 0 {
+		timer := time.NewTimer(time.Millisecond * time.Duration(mb.latency))
+		<-timer.C
+	}
+
 	switch r.URL.Path {
 	case "/echo":
 		mb.handleEcho(w, r)
@@ -74,12 +82,13 @@ func (mb *MockBackend) handleEchoBody(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	w.WriteHeader(http.StatusOK)
 	_, err = w.Write(body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (mb *MockBackend) handleEcho(w http.ResponseWriter, r *http.Request) {
