@@ -1,1 +1,1 @@
-testing making my own http tunnel / reverse proxy
+Proof of concept to myself. Continuing official version on https://github.com/tifye/Coconut
