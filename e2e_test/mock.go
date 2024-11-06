@@ -74,8 +74,12 @@ func (mb *MockBackend) handleEchoBody(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	_, err = w.Write(body)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	w.Write(body)
 }
 
 func (mb *MockBackend) handleEcho(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +97,11 @@ func (mb *MockBackend) handleEcho(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(response)
+	err := json.NewEncoder(w).Encode(response)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 }
 
 func (mb *MockBackend) handleDefault(w http.ResponseWriter, r *http.Request) {
