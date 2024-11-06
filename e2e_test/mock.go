@@ -40,6 +40,14 @@ func newMockBackend(config *MockBackendConfig) *MockBackend {
 	return backend
 }
 
+func (mb *MockBackend) Close() {
+	if mb.rateLimiter != nil {
+		mb.rateLimiter.Stop()
+	}
+	mb.Server.CloseClientConnections()
+	mb.Server.Close()
+}
+
 func (mb *MockBackend) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if mb.rateLimiter != nil {
 		select {

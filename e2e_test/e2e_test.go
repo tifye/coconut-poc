@@ -96,7 +96,7 @@ func (ts *testSuite) teardown() {
 	ts.shutdownCancel()
 
 	eg.Go(func() error {
-		ts.mockBackend.Server.Close()
+		ts.mockBackend.Close()
 		return nil
 	})
 
