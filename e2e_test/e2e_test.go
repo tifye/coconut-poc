@@ -39,13 +39,10 @@ func (ts *testSuite) setup() {
 	})
 
 	_, pri, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		ts.t.Fatalf("failed to generate ssh key pair: %s", err)
-	}
+	require.NoError(ts.t, err, "failed to generate ssh key pair")
+
 	signer, err := ssh.NewSignerFromKey(pri)
-	if err != nil {
-		ts.t.Fatalf("failed create signer from private key: %s", err)
-	}
+	require.NoError(ts.t, err, "failed create signer from private key")
 
 	scfg := &pkg.ServerConfig{
 		NoClientAuth:          true,
@@ -85,7 +82,6 @@ func (ts *testSuite) setup() {
 			ts.t.Errorf("client err: %s", err)
 		}
 	}()
-
 }
 
 func (ts *testSuite) teardown() {
