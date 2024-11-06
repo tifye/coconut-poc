@@ -51,8 +51,9 @@ func (ts *testSuite) setup() {
 		NoClientAuth:          true,
 		Logger:                log.New(io.Discard),
 		ClientListenerAddress: "127.0.0.1:9000",
-		FrontendAddress:       "this.pc:9997",
-		Signer:                signer,
+		// needed to set custom host because could not make request to subdomain on localhost from here
+		FrontendAddress: "this.pc:9997",
+		Signer:          signer,
 	}
 	server, err := pkg.NewServer(scfg)
 	require.Nil(ts.t, err, err)
