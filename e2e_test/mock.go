@@ -102,5 +102,9 @@ func (mb *MockBackend) handleDefault(w http.ResponseWriter, r *http.Request) {
 		"message": "mock backend response",
 		"path":    r.URL.Path,
 	}
-	json.NewEncoder(w).Encode(response)
+	err := json.NewEncoder(w).Encode(response)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 }
