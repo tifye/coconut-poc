@@ -37,6 +37,7 @@ type Server struct {
 	mu           sync.Mutex
 	shuttingDown atomic.Bool
 	clLn         net.Listener
+	proxyLn      net.Listener
 	proxy        *http.Server
 }
 
@@ -134,6 +135,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to start server listener: %s", err)
 	}
+	s.proxyLn = serverLn
 
 	go func() {
 		s.logger.Info("Serving")
@@ -155,6 +157,11 @@ func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	for _, sesh := range s.sessions {
+		sesh.Close(ctx)
+	}
+	s.sessions = nil
+
 	err := s.proxy.Shutdown(ctx)
 	if err != nil {
 		return err
@@ -163,6 +170,11 @@ func (s *Server) Close(ctx context.Context) error {
 	err = s.clLn.Close()
 	if err != nil {
 		s.logger.Error("client listener close", "err", err)
+	}
+
+	err = s.proxyLn.Close()
+	if err != nil {
+		s.logger.Error("proxy listener close", "err", err)
 	}
 
 	return nil
