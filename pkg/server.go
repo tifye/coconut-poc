@@ -23,6 +23,7 @@ type ServerConfig struct {
 	PublicKeyAuthAlgorithms []string
 	PublicKeyCallback       func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error)
 	ClientListenerAddress   string
+	FrontendAddress         string
 	NoClientAuth            bool
 	Logger                  *log.Logger
 }
@@ -30,11 +31,14 @@ type ServerConfig struct {
 type Server struct {
 	logger       *log.Logger
 	cAddr        string
+	fAddr        string
 	sshcfg       *ssh.ServerConfig
 	sessions     map[string]*Session
 	mu           sync.Mutex
 	shuttingDown atomic.Bool
 	clLn         net.Listener
+	proxyLn      net.Listener
+	proxy        *http.Server
 }
 
 func NewServer(config *ServerConfig) (*Server, error) {
@@ -72,6 +76,7 @@ func NewServer(config *ServerConfig) (*Server, error) {
 		cAddr:    config.ClientListenerAddress,
 		logger:   config.Logger,
 		sshcfg:   sshConfig,
+		fAddr:    config.FrontendAddress,
 		sessions: make(map[string]*Session, 0),
 	}, nil
 }
@@ -81,8 +86,6 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		log.Fatal("failed to listen on port 9000:", err)
 	}
-	defer ln.Close()
-
 	s.clLn = ln
 
 	go func() {
@@ -127,36 +130,51 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	server := s.newServerProxy()
+	s.proxy = server
+	serverLn, err := net.Listen("tcp", s.fAddr)
+	if err != nil {
+		return fmt.Errorf("failed to start server listener: %s", err)
+	}
+	s.proxyLn = serverLn
 
 	go func() {
 		s.logger.Info("Serving")
-		err := server.ListenAndServe()
+		err := server.Serve(serverLn)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logger.Fatal(err)
+			s.logger.Error("server failed", "err", err)
+			s.Close(context.Background())
 		}
 	}()
-
-	<-ctx.Done()
-
-	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	s.logger.Info("Shutting down")
-	err = server.Shutdown(ctxShutDown)
-	if err != nil {
-		return fmt.Errorf("err on shutdown, got: %s", err)
-	}
-
 	return nil
 }
 
 func (s *Server) Close(ctx context.Context) error {
-	s.shuttingDown.Store(true)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	err := s.clLn.Close()
+	if s.shuttingDown.Load() {
+		return errors.New("already closed")
+	}
+	s.shuttingDown.Store(true)
+
+	for _, sesh := range s.sessions {
+		sesh.Close(ctx)
+	}
+	s.sessions = nil
+
+	err := s.proxy.Shutdown(ctx)
+	if err != nil {
+		return err
+	}
+
+	err = s.clLn.Close()
 	if err != nil {
 		s.logger.Error("client listener close", "err", err)
+	}
+
+	err = s.proxyLn.Close()
+	if err != nil {
+		s.logger.Error("proxy listener close", "err", err)
 	}
 
 	return nil
@@ -223,7 +241,7 @@ func (s *Server) newServerProxy() *http.Server {
 	})
 
 	server := &http.Server{
-		Addr:         "127.0.0.1:9997",
+		Addr:         s.fAddr,
 		Handler:      &mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,

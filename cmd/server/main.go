@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/joho/godotenv"
@@ -45,6 +46,7 @@ func run(ctx context.Context, logger *log.Logger) error {
 	}
 
 	config := &pkg.ServerConfig{
+		FrontendAddress:         "127.0.0.1:9997",
 		ClientListenerAddress:   "127.0.0.1:9000",
 		Logger:                  logger,
 		Signer:                  signer,
@@ -65,7 +67,21 @@ func run(ctx context.Context, logger *log.Logger) error {
 		return err
 	}
 
-	return server.Start(ctx)
+	err = server.Start(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		ctxShutdown, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		logger.Info("closing server")
+		err := server.Close(ctxShutdown)
+		if err != nil {
+			logger.Errorf("failed to close server: %s", err)
+		}
+	}()
+	<-ctx.Done()
+	return nil
 }
 
 func main() {
